@@ -1,0 +1,405 @@
+---
+title: "R Notebook"
+output:
+  html_document:
+    df_print: paged
+---
+## Load Libraries
+```{r library}
+library(tidytext)
+library(dplyr)
+library(syuzhet)
+library(ggplot2)
+require(tm)
+library(SnowballC)
+library(wordcloud)
+library(plotly)
+library(tidyr)
+library(igraph)
+library(ggraph)
+library(lattice)
+library(udpipe)
+library(text2vec)
+library(Rtsne)
+mc.cores = 4
+```
+## Load Datasets 
+```{r load datasets}
+uber.tweets <- read.csv(file.choose())
+lyft.tweets <- read.csv(file.choose())
+```
+## Get Uber Sentiment
+```{r Uber Sentiment}
+uber.sentiment <- get_nrc_sentiment(as.character(uber.tweets$text))
+uber.sentiment
+uber.sentiment <- cbind(uber.tweets[,c("created_at","retweet_count","favorite_count","text")],uber.sentiment)
+u.uber <- reshape2::melt(uber.sentiment,
+    variable.name = "emotion",
+    value.name = "sentiment",
+    id.vars = c("created_at", "favorite_count", "retweet_count","text"))
+p.uber <- ggplot(u.uber, aes(x = emotion, y = sentiment,
+  fill = emotion)) + theme_minimal() +
+  coord_cartesian(ylim = c(0, 10)) +
+  geom_jitter(color = "#ffffff", shape = 21,
+    size = 2, alpha = .7, stroke = .15) +
+  coord_flip() + labs(y = "", x = "",
+    title = "Uber's NRC Sentiment") +
+  theme(legend.position = "none",
+    text = element_text("Georgia", size = 18)
+    # ,axis.text.x = element_blank()
+    )
+p.uber
+```
+## Get Random Sample from Lyft Tweets
+```{r random sample}
+set.seed(2366)
+sample <- lyft.tweets[sample(nrow(lyft.tweets), 2366), ]
+```
+## Get Lyft Sentiment
+```{r Lyft Sentiment}
+lyft.sentiment <- get_nrc_sentiment(as.character(sample$text))
+lyft.sentiment <- cbind(sample[,c("created_at","retweet_count","favorite_count","text")], lyft.sentiment)
+u.lyft <- reshape2::melt(lyft.sentiment,
+    variable.name = "emotion",
+    value.name = "sentiment",
+    id.vars = c("created_at", "favorite_count", "retweet_count","text"))
+p.lyft <- ggplot(u.lyft, aes(x = emotion, y = sentiment,
+  fill = emotion)) + theme_minimal() +
+  coord_cartesian(ylim = c(0, 10)) +
+  geom_jitter(color = "#ffffff", shape = 21,
+    size = 2, alpha = .7, stroke = .15) +
+  coord_flip() + labs(y = "", x = "",
+    title = "Lyft's NRC Sentiment") +
+  theme(legend.position = "none",
+    text = element_text("Georgia", size = 18)
+    # ,axis.text.x = element_blank()
+    )
+p.lyft
+```
+## Compare Sentiments Between Uber and Lyft
+```{r sentiment comparison}
+u <- reshape2::melt(uber.sentiment,
+    variable.name = "emotion",
+    value.name = "sentiment",
+    id.vars = c("created_at", "favorite_count", "retweet_count","text"))
+l <- reshape2::melt(lyft.sentiment,
+    variable.name = "emotion",
+    value.name = "sentiment",
+    id.vars = c("created_at", "favorite_count", "retweet_count","text"))
+u <- mutate(u, App = "Uber")
+l <- mutate(l, App = "Lyft")
+both.apps <- rbind(u, l)
+both.apps.aggr <- both.apps %>%
+      group_by(App, emotion) %>% 
+      summarise(sentiment = sum(sentiment))
+g <- ggplot(data = both.apps.aggr, mapping = aes(x = emotion, y = sentiment))
+g <- g + geom_bar(aes(fill = App),stat = "identity", position = "dodge")
+g <- g + theme_minimal() + theme(legend.position = "bottom") + labs(title = "NRC Sentiment Comparison", y = "Total Sentiment", x = "Emotion")
+g + scale_fill_discrete(name  = "App",
+                            breaks=c("Uber", "Lyft"),
+                            labels=c("Uber", "Lyft"))
+```
+## Create Wordcloud
+```{r wordcloud uber}
+uber.tweets$text=gsub("&amp", "", uber.tweets$text)
+uber.tweets$text = gsub("&amp", "", uber.tweets$text)
+uber.tweets$text = gsub("(RT|via)((?:\\b\\W*@\\w+)+)", "", uber.tweets$text)
+uber.tweets$text = gsub("@\\w+", "", uber.tweets$text)
+uber.tweets$text = gsub("[[:punct:]]", "", uber.tweets$text)
+uber.tweets$text = gsub("[[:digit:]]", "", uber.tweets$text)
+uber.tweets$text = gsub("http\\w+", "", uber.tweets$text)
+uber.tweets$text = gsub("[ \t]{2,}", "", uber.tweets$text)
+uber.tweets$text = gsub("^\\s+|\\s+$", "", uber.tweets$text)
+uber.tweets$text <- iconv(uber.tweets$text, "UTF-8", "ASCII", sub="")
+emotions <- get_nrc_sentiment(uber.tweets$text)
+emo_bar = colSums(emotions)
+emo_sum = data.frame(count=emo_bar, emotion=names(emo_bar))
+emo_sum$emotion = factor(emo_sum$emotion, levels=emo_sum$emotion[order(emo_sum$count, decreasing = TRUE)])
+wordcloud_tweet = c(
+  paste(uber.tweets$text[emotions$anger > 0], collapse=" "),
+  paste(uber.tweets$text[emotions$anticipation > 0], collapse=" "),
+  paste(uber.tweets$text[emotions$disgust > 0], collapse=" "),
+  paste(uber.tweets$text[emotions$fear > 0], collapse=" "),
+  paste(uber.tweets$text[emotions$joy > 0], collapse=" "),
+  paste(uber.tweets$text[emotions$sadness > 0], collapse=" "),
+  paste(uber.tweets$text[emotions$surprise > 0], collapse=" "),
+  paste(uber.tweets$text[emotions$trust > 0], collapse=" ")
+)
+Uber.corpus = Corpus(VectorSource(wordcloud_tweet))
+Uber.corpus = tm_map(Uber.corpus, tolower)
+Uber.corpus = tm_map(Uber.corpus, removePunctuation)
+Uber.corpus = tm_map(Uber.corpus, removeWords, c(stopwords("english")))
+Uber.corpus = tm_map(Uber.corpus, stemDocument)
+Uber.tdm = TermDocumentMatrix(Uber.corpus)
+Uber.tdm = as.matrix(Uber.tdm)
+Tdmnew.uber <- Uber.tdm[nchar(rownames(Uber.tdm)) < 11,]
+colnames(Uber.tdm) = c('anger', 'anticipation', 'disgust', 'fear', 'joy', 'sadness', 'surprise', 'trust')
+colnames(Tdmnew.uber) <- colnames(Uber.tdm)
+comparison.cloud(Tdmnew.uber, random.order=FALSE, colors = c("#00B2FF", "red", "#FF0099", "#6600CC", "green", "orange", "blue", "brown"),
+title.size=1, max.words=500, scale=c(2.5, 0.4),rot.per=0.4)
+```
+```{r lyft wordcloud}
+sample$text=gsub("&amp", "", sample$text)
+sample$text = gsub("&amp", "", sample$text)
+sample$text = gsub("(RT|via)((?:\\b\\W*@\\w+)+)", "", sample$text)
+sample$text = gsub("@\\w+", "", sample$text)
+sample$text = gsub("[[:punct:]]", "", sample$text)
+sample$text = gsub("[[:digit:]]", "", sample$text)
+sample$text = gsub("http\\w+", "", sample$text)
+sample$text = gsub("[ \t]{2,}", "", sample$text)
+sample$text = gsub("^\\s+|\\s+$", "", sample$text)
+sample$text <- iconv(sample$text, "UTF-8", "ASCII", sub="")
+emotions.lyft <- get_nrc_sentiment(sample$text)
+emo_bar.lyft= colSums(emotions.lyft)
+emo_sum.lyft = data.frame(count=emo_bar.lyft, emotion.lyft=names(emo_bar.lyft))
+emo_sum.lyft$emotion = factor(emo_sum$emotion, levels=emo_sum.lyft$emotion[order(emo_sum.lyft$count, decreasing = TRUE)])
+wordcloud_tweet.lyft = c(
+  paste(sample$text[emotions.lyft$anger > 0], collapse=" "),
+  paste(sample$text[emotions.lyft$anticipation > 0], collapse=" "),
+  paste(sample$text[emotions.lyft$disgust > 0], collapse=" "),
+  paste(sample$text[emotions.lyft$fear > 0], collapse=" "),
+  paste(sample$text[emotions.lyft$joy > 0], collapse=" "),
+  paste(sample$text[emotions.lyft$sadness > 0], collapse=" "),
+  paste(sample$text[emotions.lyft$surprise > 0], collapse=" "),
+  paste(sample$text[emotions.lyft$trust > 0], collapse=" ")
+)
+lyft.corpus = Corpus(VectorSource(wordcloud_tweet.lyft))
+lyft.corpus = tm_map(lyft.corpus, tolower)
+lyft.corpus = tm_map(lyft.corpus, removePunctuation)
+lyft.corpus = tm_map(lyft.corpus, removeWords, c(stopwords("english")))
+lyft.corpus = tm_map(lyft.corpus, stemDocument)
+lyft.tdm = TermDocumentMatrix(lyft.corpus)
+lyft.tdm = as.matrix(lyft.tdm)
+Tdmnew.lyft <- lyft.tdm[nchar(rownames(lyft.tdm)) < 11,]
+colnames(lyft.tdm) = c('anger', 'anticipation', 'disgust', 'fear', 'joy', 'sadness', 'surprise', 'trust')
+colnames(Tdmnew.lyft) <- colnames(lyft.tdm)
+comparison.cloud(Tdmnew.lyft, random.order=FALSE, colors = c("#00B2FF", "red", "#FF0099", "#6600CC", "green", "orange", "blue", "brown"),
+title.size=1, max.words=500, scale=c(2.5, 0.4),rot.per=0.4)
+```
+
+```{r emotion plot Uber}
+uber.emoplot <- plot_ly(emo_sum, x=~emotion, y=~count, type="bar", color=~emotion) %>%
+layout(xaxis=list(title=""),showlegend=FALSE,
+title="Emotion Type for Uber Tweets")
+uber.emoplot      
+```
+## Emotion Plot Lyft
+```{r emotion plot lyft}
+lyft.emoplot <- plot_ly(emo_sum.lyft, x=~emotion, y=~count, type="bar", color=~emotion) %>%
+layout(xaxis=list(title=""),showlegend=FALSE,
+title="Emotion Type for Lyft Tweets")
+lyft.emoplot 
+```
+```{r text correlation uber}
+uber_bigrams <- uber.tweets%>%
+  unnest_tokens(bigram, text, token = "ngrams", n = 2)
+uber_bigrams
+uber_bigrams %>%
+  count(bigram, sort = TRUE)
+bigrams_separated.uber <- uber_bigrams %>%
+    separate(bigram, c("word1", "word2"), sep = " ")
+bigrams_filtered.uber <- bigrams_separated.uber %>%
+    filter(!word1 %in% stop_words$word) %>%
+    filter(!word2 %in% stop_words$word)
+bigram_counts.uber <- bigrams_filtered.uber %>% 
+    count(word1, word2, sort = TRUE)
+```
+```{r text correlation lyft}
+lyft_bigrams <- lyft.tweets%>%
+  unnest_tokens(bigram, text, token = "ngrams", n = 2)
+lyft_bigrams
+lyft_bigrams %>%
+  count(bigram, sort = TRUE)
+bigrams_separated.lyft <- lyft_bigrams %>%
+    separate(bigram, c("word1", "word2"), sep = " ")
+bigrams_filtered.lyft <- bigrams_separated.lyft %>%
+    filter(!word1 %in% stop_words$word) %>%
+    filter(!word2 %in% stop_words$word)
+bigram_counts.lyft <- bigrams_filtered.lyft %>% 
+    count(word1, word2, sort = TRUE)
+```
+```{r final bigrams uber}
+bigrams_united.uber <- bigrams_filtered.uber %>%
+  unite(bigram, word1, word2, sep = " ")
+```
+```{r final bigrams lyft}
+bigrams_united.lyft <- bigrams_filtered.lyft %>%
+unite(bigram, word1, word2, sep = " ")
+```
+```{r plotted bigram networks uber}
+set.seed(2000)
+bigram_graph.uber <- bigram_counts.uber %>%
+    filter(n > 5) %>%
+    graph_from_data_frame()
+bigram_graph.uber
+a <- grid::arrow(type = "closed", length = unit(.15, "inches"))
+
+uber.network <- ggraph(bigram_graph.uber, layout = "fr") +
+    geom_edge_link(aes(edge_alpha = n), show.legend = FALSE,
+                   arrow = a, end_cap = circle(.07, 'inches')) +
+    geom_node_point(color = "lightblue", size = 5) +
+    geom_node_text(aes(label = name), vjust = 1, hjust = 1) +
+    theme_void()
+uber.network
+```
+```{r plotted bigram networks lyft}
+set.seed(2000)
+bigram_graph.lyft <- bigram_counts.lyft %>%
+    filter(n > 20) %>%
+    graph_from_data_frame()
+
+bigram_graph.lyft
+a <- grid::arrow(type = "closed", length = unit(.15, "inches"))
+
+lyft.network <- ggraph(bigram_graph.lyft, layout = "fr") +
+    geom_edge_link(aes(edge_alpha = n), show.legend = FALSE,
+                   arrow = a, end_cap = circle(.07, 'inches')) +
+    geom_node_point(color = "lightblue", size = 5) +
+    geom_node_text(aes(label = name), vjust = 1, hjust = 1) +
+    theme_void()
+lyft.network
+```
+## Word Level Sentiment Analysis
+```{r uber word level sentiment analysis}
+udmodeldl <- udpipe_download_model(language = "english")
+udmodel <- udpipe_load_model(file = udmodeldl$file_model)
+uber.tweets %>% group_by(source) %>% count() %>% arrange(desc(n))
+uber.tweets %>% group_by(source) %>% count() %>% ggplot() + geom_line(aes(source,n, group = 1))
+s.uber <- udpipe_annotate(udmodel,uber.tweets$text)
+x.uber <- data.frame(s.uber)
+stats.uber <- txt_freq(x.uber$upos)
+stats.uber$key <- factor(stats.uber$key, levels = rev(stats.uber$key))
+uberupos <- barchart(key ~ freq, data = stats.uber, col = "yellow", 
+         main = "UPOS (Universal Parts of Speech)\n frequency of occurrence Uber", 
+         xlab = "Freq")
+uberupos
+stats.uber <- subset(x.uber, upos %in% c("NOUN")) 
+stats.uber <- txt_freq(stats.uber$token)
+stats.uber$key <- factor(stats.uber$key, levels = rev(stats.uber$key))
+barchart(key ~ freq, data = head(stats.uber, 20), col = "cadetblue", 
+         main = "Most occurring nouns Uber", xlab = "Freq")
+stats.uber <- subset(x.uber, upos %in% c("ADJ")) 
+stats.uber <- txt_freq(stats.uber$token)
+stats.uber$key <- factor(stats.uber$key, levels = rev(stats.uber$key))
+barchart(key ~ freq, data = head(stats.uber, 20), col = "purple", 
+         main = "Most occurring adjectives Uber", xlab = "Freq")
+stats.uber <- subset(x.uber, upos %in% c("VERB")) 
+stats.uber <- txt_freq(stats.uber$token)
+stats.uber$key <- factor(stats.uber$key, levels = rev(stats.uber$key))
+barchart(key ~ freq, data = head(stats.uber, 20), col = "gold", 
+         main = "Most occurring Verbs Uber", xlab = "Freq")
+stats.uber <- keywords_rake(x = x.uber, term = "lemma", group = "doc_id", 
+                       relevant = x.uber$upos %in% c("NOUN", "ADJ"))
+stats.uber$key <- factor(stats.uber$keyword, levels = rev(stats.uber$keyword))
+barchart(key ~ rake, data = head(subset(stats.uber, freq > 3), 20), col = "red", 
+         main = "Keywords identified by RAKE Uber", 
+         xlab = "Rake")
+x.uber$phrase_tag <- as_phrasemachine(x.uber$upos, type = "upos")
+stats.uber <- keywords_phrases(x = x.uber$phrase_tag, term = tolower(x.uber$token), 
+                          pattern = "(A|N)*N(P+D*(A|N)*N)*", 
+                          is_regex = TRUE, detailed = FALSE)
+stats.uber <- subset(stats.uber, ngram > 1 & freq > 3)
+stats.uber$key <- factor(stats.uber$keyword, levels = rev(stats.uber$keyword))
+barchart(key ~ freq, data = head(stats.uber, 20), col = "magenta", 
+         main = "Keywords - simple noun phrases Uber", xlab = "Frequency")
+```
+```{r lyft word level sentiment analysis}
+sample %>% group_by(source) %>% count() %>% arrange(desc(n))
+sample %>% group_by(source) %>% count() %>% ggplot() + geom_line(aes(source,n, group = 1))
+s.lyft <- udpipe_annotate(udmodel, sample$text)
+x.lyft <- data.frame(s.lyft)
+stats.lyft <- txt_freq(x.lyft$upos)
+stats.lyft$key <- factor(stats.lyft$key, levels = rev(stats.lyft$key))
+lyftupos <- barchart(key ~ freq, data = stats.lyft, col = "yellow", 
+         main = "UPOS (Universal Parts of Speech)\n frequency of occurrence Lyft", 
+         xlab = "Freq")
+lyftupos
+stats.lyft <- subset(x.lyft, upos %in% c("NOUN")) 
+stats.lyft <- txt_freq(stats.lyft$token)
+stats.lyft$key <- factor(stats.lyft$key, levels = rev(stats.lyft$key))
+barchart(key ~ freq, data = head(stats.lyft, 20), col = "cadetblue", 
+         main = "Most occurring nouns Lyft", xlab = "Freq")
+stats.lyft <- subset(x.lyft, upos %in% c("ADJ")) 
+stats.lyft <- txt_freq(stats.lyft$token)
+stats.lyft$key <- factor(stats.lyft$key, levels = rev(stats.lyft$key))
+barchart(key ~ freq, data = head(stats.lyft, 20), col = "purple", 
+         main = "Most occurring adjectives Lyft", xlab = "Freq")
+stats.lyft <- subset(x.lyft, upos %in% c("VERB")) 
+stats.lyft <- txt_freq(stats.lyft$token)
+stats.lyft$key <- factor(stats.lyft$key, levels = rev(stats.lyft$key))
+barchart(key ~ freq, data = head(stats.lyft, 20), col = "gold", 
+         main = "Most occurring Verbs Lyft", xlab = "Freq")
+stats.lyft <- keywords_rake(x = x.lyft, term = "lemma", group = "doc_id", 
+                       relevant = x.lyft$upos %in% c("NOUN", "ADJ"))
+stats.lyft$key <- factor(stats.lyft$keyword, levels = rev(stats.lyft$keyword))
+barchart(key ~ rake, data = head(subset(stats.lyft, freq > 3), 20), col = "red", 
+         main = "Keywords identified by RAKE Lyft", 
+         xlab = "Rake")
+x.lyft$phrase_tag <- as_phrasemachine(x.lyft$upos, type = "upos")
+stats.lyft <- keywords_phrases(x = x.lyft$phrase_tag, term = tolower(x.lyft$token), 
+                          pattern = "(A|N)*N(P+D*(A|N)*N)*", 
+                          is_regex = TRUE, detailed = FALSE)
+stats.lyft <- subset(stats.lyft, ngram > 1 & freq > 3)
+stats.lyft$key <- factor(stats.lyft$keyword, levels = rev(stats.lyft$keyword))
+barchart(key ~ freq, data = head(stats.lyft, 20), col = "magenta", 
+         main = "Keywords - simple noun phrases Lyft", xlab = "Frequency")
+```
+```{r uber word analysis}
+text.uber <- uber.tweets %>% mutate(id = row_number())
+tokens.uber <- space_tokenizer(uber.tweets$text %>% tolower() %>% removePunctuation())
+it.uber <- itoken(tokens.uber, progressbar = FALSE)
+vocab.uber <- create_vocabulary(it.uber)
+vocab.uber <- prune_vocabulary(vocab.uber, term_count_min = 3L)
+vectorizer.uber <- vocab_vectorizer(vocab.uber)
+tcm.uber <- create_tcm(it.uber, vectorizer.uber, skip_grams_window = 5L)
+glove.uber = GloVe$new(word_vectors_size = 100, vocabulary = vocab.uber, x_max = 5)
+glove.uber$fit_transform(tcm.uber, n_iter = 20)
+word_vectors.uber = glove.uber$components
+keep_words.uber <- setdiff(colnames(word_vectors.uber), stopwords())
+word_vec.uber <- word_vectors.uber[, keep_words.uber]
+train_df.uber <- data.frame(t(word_vec.uber)) %>% tibble::rownames_to_column("word")
+tsne.uber <- Rtsne(train_df.uber[,-1], dims = 2, perplexity = 50, verbose=TRUE, max_iter = 500)
+colors.uber = rainbow(length(unique(train_df.uber$word)))
+names(colors.uber) = unique(train_df.uber$word)
+
+plot_df.uber <- data.frame(tsne.uber$Y) %>% mutate(
+    word.uber = train_df.uber$word,
+    col.uber = colors.uber[train_df.uber$word]
+) %>% left_join(vocab.uber, by = c("word.uber" = "term")) %>%
+    filter(doc_count >= 20)
+
+ggplot(plot_df.uber, aes(X1, X2)) +
+    geom_text(aes(X1, X2, label = word.uber, color = col.uber), size = 3) +
+    xlab("") + ylab("") +
+    theme(legend.position = "none") 
+```
+```{r lyft word level analysis}
+text.lyft <- sample %>% mutate(id = row_number())
+tokens.lyft <- space_tokenizer(sample$text %>% tolower() %>% removePunctuation())
+it.lyft <- itoken(tokens.lyft, progressbar = FALSE)
+vocab.lyft <- create_vocabulary(it.lyft)
+vocab.lyft <- prune_vocabulary(vocab.lyft, term_count_min = 3L)
+vectorizer.lyft <- vocab_vectorizer(vocab.lyft)
+tcm.lyft <- create_tcm(it.lyft, vectorizer.lyft, skip_grams_window = 5L)
+glove.lyft = GloVe$new(word_vectors_size = 100, vocabulary = vocab.lyft, x_max = 5)
+glove.lyft$fit_transform(tcm.lyft, n_iter = 20)
+word_vectors.lyft = glove.lyft$components
+keep_words.lyft <- setdiff(colnames(word_vectors.lyft), stopwords())
+word_vec.lyft <- word_vectors.lyft[, keep_words.lyft]
+train_df.lyft <- data.frame(t(word_vec.lyft)) %>% tibble::rownames_to_column("word")
+tsne.lyft <- Rtsne(train_df.lyft[,-1], dims = 2, perplexity = 50, verbose=TRUE, max_iter = 500)
+colors.lyft = rainbow(length(unique(train_df.lyft$word)))
+names(colors.lyft) = unique(train_df.lyft$word)
+
+plot_df.lyft <- data.frame(tsne.lyft$Y) %>% mutate(
+    word.lyft = train_df.lyft$word,
+    col.lyft = colors.lyft[train_df.lyft$word]
+) %>% left_join(vocab.lyft, by = c("word.lyft" = "term")) %>%
+    filter(doc_count >= 20)
+
+ggplot(plot_df.lyft, aes(X1, X2)) +
+    geom_text(aes(X1, X2, label = word.lyft, color = col.lyft), size = 3) +
+    xlab("") + ylab("") +
+    theme(legend.position = "none") 
+```
+
